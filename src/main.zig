@@ -28,25 +28,10 @@ fn proceessInput(window: glfw.Window, key: glfw.Key, scancode: i32, action: glfw
         window.setShouldClose(true);
     }
 }
-const VertexAttribute = .{
-    .position = 0,
-    .color = 1,
-};
-
-const VertexAttributeCount = .{
-    .position = 3,
-    .color = 3,
-};
-const VertexT = f32;
 
 const Vertex = struct {
-    position: [VertexAttributeCount.position]VertexT,
-    color: [VertexAttributeCount.color]VertexT,
-};
-
-const VertexAttributeByte = .{
-    .position = 3 * @sizeOf(VertexT),
-    .color = 3 * @sizeOf(VertexT),
+    position: [3]f32,
+    color: [3]f32,
 };
 
 const vertices = [_]Vertex{
@@ -67,38 +52,62 @@ const vertices = [_]Vertex{
         .color = .{ 0.0, 0.0, 1.0 },
     },
 };
+
 const indeces = [_]u32{
     0, 1, 2,
     2, 3, 0,
 };
 
-var vao: ?zgl.VertexArray = undefined;
-var vbo: ?zgl.Buffer = undefined;
-var ebo: ?zgl.Buffer = undefined;
+const Shader = struct {
+    vao: zgl.VertexArray,
+    vbo: zgl.Buffer,
+    ebo: zgl.Buffer,
+    program: zgl.Program,
+};
 
-fn render() void {
+fn render(shader: Shader) void {
     zgl.clearColor(0.2, 0.3, 0.3, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
+
+    const timeValue = @floatCast(f32, glfw.getTime());
+    const time = zgl.getUniformLocation(shader.program, "time");
+    zgl.uniform1f(time, timeValue);
+
+    zgl.useProgram(shader.program);
+    zgl.bindVertexArray(shader.vao);
+    zgl.bindBuffer(shader.ebo, zgl.BufferTarget.element_array_buffer);
+    zgl.drawElements(
+        zgl.PrimitiveType.triangles,
+        indeces.len,
+        zgl.ElementType.u32,
+        0,
+    );
 }
 
 fn createShaderProgram() zgl.Program {
     const vertexShader = zgl.createShader(zgl.ShaderType.vertex);
-    const vertexFiles = .{@embedFile("shaders/vert.glsl")};
+    const vertexFiles = .{@embedFile("shaders/vert.vert")};
     zgl.shaderSource(vertexShader, vertexFiles.len, &vertexFiles);
     zgl.compileShader(vertexShader);
     defer zgl.deleteShader(vertexShader);
 
     const fragmentShader = zgl.createShader(zgl.ShaderType.fragment);
-    const fragFiles = .{@embedFile("shaders/frag.glsl")};
-    zgl.shaderSource(fragmentShader, fragFiles.len, &fragFiles);
+    const fragmentFiles = .{@embedFile("shaders/frag.frag")};
+    zgl.shaderSource(fragmentShader, fragmentFiles.len, &fragmentFiles);
     zgl.compileShader(fragmentShader);
     defer zgl.deleteShader(fragmentShader);
 
-    const shaderProgram = zgl.createProgram();
-    zgl.attachShader(shaderProgram, vertexShader);
-    zgl.attachShader(shaderProgram, fragmentShader);
-    zgl.linkProgram(shaderProgram);
-    return shaderProgram;
+    const program = zgl.createProgram();
+    zgl.attachShader(program, vertexShader);
+    zgl.attachShader(program, fragmentShader);
+    zgl.linkProgram(program);
+
+    return program;
+}
+
+fn initGL() !void {
+    const proc: glfw.GLProc = undefined;
+    try gl.load(proc, glGetProcAddress);
 }
 
 pub fn main() !void {
@@ -110,76 +119,96 @@ pub fn main() !void {
     defer glfw.terminate();
 
     // Create our window
-    const window = glfw.Window.create(WIDTH, HEIGHT, "Uvozhe!", null, null, .{
-        .opengl_profile = .opengl_core_profile,
-        .context_version_major = 4,
-        .context_version_minor = 5,
-    }) orelse {
+    const window = glfw.Window.create(
+        WIDTH,
+        HEIGHT,
+        "Uvozhe!",
+        null,
+        null,
+        .{
+            .opengl_profile = .opengl_core_profile,
+            .context_version_major = 4,
+            .context_version_minor = 6,
+        },
+    ) orelse {
         std.log.err("failed to create GLFW window: {?s}", .{glfw.getErrorString()});
         std.process.exit(1);
     };
     defer window.destroy();
     glfw.makeContextCurrent(window);
 
-    const proc: glfw.GLProc = undefined;
-    try gl.load(proc, glGetProcAddress);
+    try initGL();
+    glfw.Window.setFramebufferSizeCallback(window, resize);
 
     zgl.viewport(0, 0, WIDTH, HEIGHT);
 
-    glfw.Window.setFramebufferSizeCallback(window, resize);
+    const vao = zgl.genVertexArray();
+    zgl.bindVertexArray(vao);
+    defer zgl.deleteVertexArray(vao);
 
-    vao = zgl.genVertexArray();
-    zgl.bindVertexArray(vao.?);
-    defer zgl.deleteVertexArray(vao.?);
+    const vbo = zgl.genBuffer();
+    zgl.bindBuffer(vbo, zgl.BufferTarget.array_buffer);
+    zgl.bufferData(
+        zgl.BufferTarget.array_buffer,
+        Vertex,
+        &vertices,
+        zgl.BufferUsage.static_draw,
+    );
+    defer zgl.deleteBuffer(vbo);
 
-    vbo = zgl.genBuffer();
-    zgl.bindBuffer(vbo.?, zgl.BufferTarget.array_buffer);
-    zgl.bufferData(zgl.BufferTarget.array_buffer, Vertex, &vertices, zgl.BufferUsage.static_draw);
-    defer zgl.deleteBuffer(vbo.?);
+    const ebo = zgl.genBuffer();
+    zgl.bindBuffer(ebo, zgl.BufferTarget.element_array_buffer);
+    zgl.bufferData(
+        zgl.BufferTarget.element_array_buffer,
+        u32,
+        &indeces,
+        zgl.BufferUsage.static_draw,
+    );
+    defer zgl.deleteBuffer(ebo);
 
-    ebo = zgl.genBuffer();
-    zgl.bindBuffer(ebo.?, zgl.BufferTarget.element_array_buffer);
-    zgl.bufferData(zgl.BufferTarget.element_array_buffer, u32, &indeces, zgl.BufferUsage.static_draw);
+    const shaderProgram = createShaderProgram();
+    defer zgl.deleteProgram(shaderProgram);
 
+    const shader = Shader{
+        .vao = vao,
+        .vbo = vbo,
+        .ebo = ebo,
+        .program = shaderProgram,
+    };
+
+    const aPos = zgl.getAttribLocation(shader.program, "aPos").?;
     zgl.vertexAttribPointer(
-        VertexAttribute.position,
+        aPos,
         vertices.len,
         zgl.Type.float,
         false,
         @sizeOf(Vertex),
         @offsetOf(Vertex, "position"),
     );
+    zgl.enableVertexAttribArray(aPos);
+
+    const aCol = zgl.getAttribLocation(shader.program, "aCol").?;
     zgl.vertexAttribPointer(
-        VertexAttribute.color,
+        aCol,
         vertices.len,
         zgl.Type.float,
         false,
         @sizeOf(Vertex),
         @offsetOf(Vertex, "color"),
     );
+    zgl.enableVertexAttribArray(aCol);
 
-    zgl.enableVertexAttribArray(VertexAttribute.position);
-    zgl.enableVertexAttribArray(VertexAttribute.color);
-
-    const shaderProgram = createShaderProgram();
-    defer zgl.deleteProgram(shaderProgram);
-    zgl.useProgram(shaderProgram);
-    zgl.uniform2f(zgl.getUniformLocation(shaderProgram, "resolution"), HEIGHT, WIDTH);
+    zgl.useProgram(shader.program);
+    const resolution = zgl.getUniformLocation(shader.program, "resolution").?;
+    zgl.uniform2f(resolution, HEIGHT, WIDTH);
 
     zgl.enable(zgl.Capabilities.blend);
     zgl.blendFunc(zgl.BlendFactor.src_alpha, zgl.BlendFactor.one_minus_src_alpha);
 
     // zgl.polygonMode(zgl.CullMode.front_and_back, zgl.DrawMode.line);
-    // Wait for the user to close the window.
     glfw.Window.setKeyCallback(window, proceessInput);
     while (!window.shouldClose()) {
-        render();
-
-        zgl.useProgram(shaderProgram);
-        zgl.bindVertexArray(vao.?);
-        zgl.bindBuffer(ebo.?, zgl.BufferTarget.element_array_buffer);
-        zgl.drawElements(zgl.PrimitiveType.triangles, indeces.len, zgl.ElementType.u32, 0);
-
+        render(shader);
         glfw.pollEvents();
         window.swapBuffers();
     }
